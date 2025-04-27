@@ -1,188 +1,172 @@
-import os
 import discord
 from discord.ext import commands
-import yt_dlp as youtube_dl
-from spotipy import Spotify
-from spotipy.oauth2 import SpotifyClientCredentials
+import asyncio
+import yt_dlp
+import datetime
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Setup Spotify (Client Credentials Flow)
-sp = Spotify(auth_manager=SpotifyClientCredentials(
-    client_id=os.getenv("SPOTIFY_CLIENT_ID"),
-    client_secret=os.getenv("SPOTIFY_CLIENT_SECRET")
-))
+# Configurações do yt-dlp e ffmpeg
+ytdl_format_options = {
+    "format": "bestaudio/best",
+    "quiet": True,
+    "no_warnings": True,
+    "ignoreerrors": False,
+    "noplaylist": True,
+    "default_search": "auto",
+    "source_address": "0.0.0.0"
+}
+ffmpeg_options = {
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+    "options": "-vn"
+}
 
-# Opções do yt-dlp
-ytdl_opts = {
-    'format': 'bestaudio/best',
-    'quiet': True,
-    'noplaylist': True,
-    'nocheckcertificate': True,
-    'ignoreerrors': False,
-    'logtostderr': False,
-    'source_address': '0.0.0.0',
-}
-ffmpeg_opts = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn',
-}
-ytdl = youtube_dl.YoutubeDL(ytdl_opts)
+ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
+
 
 class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.queues = {}   # guild_id -> [(title, stream_url)]
-        self.current = {}  # guild_id -> title
+        self.queue = []                # fila de (url, title)
+        self.is_playing = False
+        self.current = None            # título da música atual
+        self.volume = 0.5              # volume padrão (50%)
+        self.cache = {}                # cache: query -> (url, title, timestamp)
+        self.cache_timeout = 10 * 60   # 10 minutos
+        self.voice_client = None
 
-    async def ensure_voice(self, ctx):
-        if not (ctx.author.voice and ctx.author.voice.channel):
-            await ctx.send("❌ Você precisa estar em um canal de voz!")
-            return False
-        vc = ctx.voice_client
-        channel = ctx.author.voice.channel
-        if not vc:
-            await channel.connect()
-        elif vc.channel != channel:
-            await vc.move_to(channel)
-        return True
+    async def search_yt(self, query: str):
+        now = datetime.datetime.utcnow()
+        if query in self.cache:
+            url, title, ts = self.cache[query]
+            if (now - ts).total_seconds() < self.cache_timeout:
+                return url, title
+            else:
+                del self.cache[query]
 
-    def _extract_info(self, query: str):
-        """Tenta extrair info do link; em falha retorna None."""
         try:
-            info = ytdl.extract_info(query, download=False)
-            if isinstance(info, dict) and info.get('entries'):
-                info = info['entries'][0]
-            return info
+            data = ytdl.extract_info(f"ytsearch:{query}", download=False)
+            entry = data["entries"][0]
+            url = entry["url"]
+            title = entry["title"]
+            self.cache[query] = (url, title, now)
+            return url, title
         except Exception:
-            return None
+            return None, None
 
-    @commands.command()
-    async def play(self, ctx, *, query: str):
-        """Adiciona à fila ou toca imediatamente."""
-        if not await self.ensure_voice(ctx):
+    async def play_music(self, ctx):
+        if not self.queue:
+            self.is_playing = False
+            # desconecta após 10s sem tocar nada
+            await asyncio.sleep(10)
+            if not self.is_playing and self.voice_client:
+                await self.voice_client.disconnect()
+                self.voice_client = None
             return
 
-        gid = ctx.guild.id
-        self.queues.setdefault(gid, [])
+        self.is_playing = True
+        url, title = self.queue.pop(0)
+        self.current = title
 
-        # Converte link Spotify em termos de busca
-        if "open.spotify.com/track" in query:
-            try:
-                track = sp.track(query)
-                query = f"{track['name']} {track['artists'][0]['name']}"
-                await ctx.send(f"🔄 Convertendo Spotify → YouTube: **{query}**")
-            except Exception:
-                return await ctx.send("⚠️ Não consegui buscar essa faixa no Spotify.")
+        # envia mensagem de now playing
+        await ctx.send(f"🎶 Agora tocando: **{title}**")
 
-        info = None
-        # Tenta link direto
-        if query.startswith("http"):
-            info = self._extract_info(query)
+        # prepara e toca
+        source = discord.PCMVolumeTransformer(
+            discord.FFmpegPCMAudio(url, **ffmpeg_options),
+            volume=self.volume
+        )
+        self.voice_client.play(
+            source,
+            after=lambda e, _ctx=ctx: asyncio.run_coroutine_threadsafe(self.play_next(_ctx), self.bot.loop)
+        )
 
-        # Fallback para busca de 1 resultado no YouTube
-        if not info:
-            try:
-                search = f"ytsearch1:{query}"
-                data = ytdl.extract_info(search, download=False)
-                entries = data.get('entries') or []
-                info = entries[0] if entries else None
-            except Exception:
-                info = None
+    async def play_next(self, ctx):
+        await self.play_music(ctx)
 
-        if not info:
-            return await ctx.send("❌ Não encontrei essa música no YouTube.")
+    @commands.command(name="play")
+    async def cmd_play(self, ctx, *, query: str):
+        if not ctx.author.voice or not ctx.author.voice.channel:
+            return await ctx.send("❌ Você precisa estar em um canal de voz!")
 
-        title = info.get('title', 'Unknown Title')
-        stream_url = info.get('url')  # link de áudio processado
+        # conecta/move o bot
+        channel = ctx.author.voice.channel
+        if not self.voice_client or not self.voice_client.is_connected():
+            self.voice_client = await channel.connect()
+        elif self.voice_client.channel != channel:
+            await self.voice_client.move_to(channel)
 
-        vc = ctx.voice_client
-        queue = self.queues[gid]
+        # busca no YouTube
+        url, title = await self.search_yt(query)
+        if not url:
+            return await ctx.send("❌ Música não encontrada.")
 
-        # Se já estiver tocando, adiciona à fila
-        if vc.is_playing() or vc.is_paused():
-            queue.append((title, stream_url))
-            return await ctx.send(f"✅ **{title}** adicionada à fila (posição {len(queue)}).")
+        # adiciona à fila e inicia se estiver livre
+        self.queue.append((url, title))
+        await ctx.send(f"✅ Adicionado à fila: **{title}**")
+        if not self.is_playing:
+            await self.play_music(ctx)
 
-        # Caso contrário, insere e toca
-        queue.insert(0, (title, stream_url))
-        await self._play_next(ctx)
-
-    async def _play_next(self, ctx):
-        gid = ctx.guild.id
-        q = self.queues.get(gid)
-        if not q:
-            await ctx.voice_client.disconnect()
-            self.current.pop(gid, None)
-            return
-
-        title, stream_url = q.pop(0)
-        self.current[gid] = title
-
-        try:
-            source = await discord.FFmpegOpusAudio.from_probe(stream_url, **ffmpeg_opts)
-            ctx.voice_client.play(
-                source,
-                after=lambda e: self.bot.loop.create_task(self._play_next(ctx))
-            )
-            await ctx.send(f"🎶 Tocando agora: **{title}**")
-        except Exception as e:
-            await ctx.send(f"❌ Erro ao tocar **{title}**. Pulando para a próxima.\n`{e}`")
-            await self._play_next(ctx)
-
-    @commands.command()
-    async def skip(self, ctx):
-        vc = ctx.voice_client
-        if vc and (vc.is_playing() or vc.is_paused()):
-            vc.stop()
-            await ctx.send("⏭️ Música pulada.")
+    @commands.command(name="skip")
+    async def cmd_skip(self, ctx):
+        if self.voice_client and self.voice_client.is_playing():
+            self.voice_client.stop()
+            await ctx.send("⏭️ Música pulada!")
         else:
-            await ctx.send("❌ Nada para pular.")
+            await ctx.send("⚠️ Não há música tocando.")
 
-    @commands.command()
-    async def stop(self, ctx):
-        vc = ctx.voice_client
-        if vc:
-            self.queues.pop(ctx.guild.id, None)
-            self.current.pop(ctx.guild.id, None)
-            await vc.disconnect()
-            await ctx.send("🛑 Parado e desconectado.")
-        else:
-            await ctx.send("❌ Não estou em um canal de voz.")
+    @commands.command(name="stop")
+    async def cmd_stop(self, ctx):
+        self.queue.clear()
+        if self.voice_client:
+            await self.voice_client.disconnect()
+            self.voice_client = None
+        self.is_playing = False
+        await ctx.send("🛑 Parado e desconectado.")
 
-    @commands.command()
-    async def pause(self, ctx):
-        vc = ctx.voice_client
-        if vc and vc.is_playing():
-            vc.pause()
+    @commands.command(name="pause")
+    async def cmd_pause(self, ctx):
+        if self.voice_client and self.voice_client.is_playing():
+            self.voice_client.pause()
             await ctx.send("⏸️ Pausado.")
         else:
-            await ctx.send("❌ Nada para pausar.")
+            await ctx.send("⚠️ Nada para pausar.")
 
-    @commands.command()
-    async def resume(self, ctx):
-        vc = ctx.voice_client
-        if vc and vc.is_paused():
-            vc.resume()
+    @commands.command(name="resume")
+    async def cmd_resume(self, ctx):
+        if self.voice_client and self.voice_client.is_paused():
+            self.voice_client.resume()
             await ctx.send("▶️ Retomado.")
         else:
-            await ctx.send("❌ Nenhuma música pausada.")
+            await ctx.send("⚠️ Nada para retomar.")
 
     @commands.command(name="queue")
-    async def show_queue(self, ctx):
-        q = self.queues.get(ctx.guild.id, [])
-        if not q:
+    async def cmd_queue(self, ctx):
+        if not self.queue:
             return await ctx.send("📭 Fila vazia.")
-        embed = discord.Embed(title="📜 Fila", color=discord.Color.blurple())
-        for i, (t, _) in enumerate(q, 1):
-            embed.add_field(name=f"{i}.", value=t, inline=False)
-        await ctx.send(embed=embed)
+        msg = "🎵 **Fila de reprodução:**\n"
+        for i, (_url, title) in enumerate(self.queue, 1):
+            msg += f"{i}. {title}\n"
+        await ctx.send(msg)
 
     @commands.command(name="nowplaying")
-    async def now_playing(self, ctx):
-        title = self.current.get(ctx.guild.id)
-        if title:
-            await ctx.send(f"▶️ Tocando: **{title}**")
+    async def cmd_nowplaying(self, ctx):
+        if self.current:
+            await ctx.send(f"▶️ Tocando agora: **{self.current}**")
         else:
             await ctx.send("❌ Nenhuma música tocando.")
+
+    @commands.command(name="volume")
+    async def cmd_volume(self, ctx, vol: int):
+        if not self.voice_client or not self.voice_client.source:
+            return await ctx.send("❌ Nada tocando no momento.")
+        if vol < 1 or vol > 100:
+            return await ctx.send("⚠️ Defina entre 1 e 100.")
+        self.volume = vol / 100
+        self.voice_client.source.volume = self.volume
+        await ctx.send(f"🔊 Volume ajustado para {vol}%")
+
+async def setup(bot):
+    await bot.add_cog(Music(bot))

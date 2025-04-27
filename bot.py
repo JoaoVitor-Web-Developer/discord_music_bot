@@ -41,7 +41,8 @@ class HelpView(discord.ui.View):
         embed1.add_field(name="🛑 !stop", value="Para a música e desconecta o bot.", inline=True)
         embed1.add_field(name="📜 !queue", value="Mostra a fila de músicas.", inline=True)
         embed1.add_field(name="🎶 !nowplaying", value="Mostra a música que está tocando agora.", inline=True)
-        embed1.set_thumbnail(url="https://cdn-icons-png.flaticon.com/512/727/727245.png")
+        embed1.add_field(name="🔊 !volume `<1-100>`", value="Ajusta o volume da música atual.", inline=True)
+        embed1.set_thumbnail(url="https://cdn-icons-png.flaticon.com/128/2871/2871323.png")
         embed1.set_footer(text="Página 1/2 — Feito com ❤️ por João Vitor")
 
         embed2 = discord.Embed(
@@ -49,11 +50,18 @@ class HelpView(discord.ui.View):
             description="Dicas e ajuda extra sobre o uso do bot.",
             color=discord.Color.blue()
         )
-        embed2.add_field(name="📌 Como usar", value="Entre em um canal de voz e use `!play <nome>` para começar!", inline=False)
-        embed2.add_field(name="🎧 Spotify", value="Links do Spotify são automaticamente convertidos!", inline=False)
-        embed2.add_field(name="📥 Suporte", value="Chame o João se precisar de ajuda 😉", inline=False)
+        embed2.add_field(name="📌 Como usar", value="Entre em um canal de voz e use `!play <nome>` para começar!",
+                         inline=False)
+        # embed2.add_field(name="🎧 Spotify", value="Links do Spotify são automaticamente convertidos!", inline=False)
+        embed2.add_field(name="🎧 Spotify", value="Links do spotify ainda não estão funcionando!!", inline=False)
+        support_id = os.getenv("SUPPORT_ID")
+        embed2.add_field(
+            name="📥 Suporte",
+            value=f"Chame o <@{support_id}> se precisar de ajuda 😉",
+            inline=False
+        )
         embed2.set_footer(text="Página 2/2 — Feito com ❤️ por João Vitor")
-        embed2.set_thumbnail(url="https://cdn-icons-png.flaticon.com/512/727/727245.png")
+        embed2.set_thumbnail(url="https://cdn-icons-png.flaticon.com/128/2871/2871323.png")
 
         return [embed1, embed2]
 
