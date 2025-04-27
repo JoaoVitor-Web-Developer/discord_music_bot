@@ -1,11 +1,14 @@
 [phases.setup]
 nixPkgs = [
-  "ffmpeg",                     # Já incluído, mas certifique-se de que está corretamente configurado
-  "libopus",                    # Adicionando o libopus
-  "python311",                   # A versão do Python
-  "python311Packages.pynacl",    # Necessário para o Discord
-  "python311Packages.discordpy" # Instala o discord.py com suporte para voz
+  "ffmpeg",                     # Já incluído
+  "libopus",                    # Adicionando libopus
+  "python311",                   # Python 3.11
+  "python311Packages.pynacl",    # Necessário para Discord
+  "python311Packages.discordpy" # Instala o discord.py
 ]
+
+[phases.install]
+cmd = "apt-get update && apt-get install -y libopus-dev" # Instalar libopus
 
 [phases.start]
 cmd = "python3 bot.py"
