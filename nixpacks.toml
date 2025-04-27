@@ -1,9 +1,10 @@
 [phases.setup]
 nixPkgs = [
-  "ffmpeg",
-  "python311",
-  "python311Packages.pynacl",
-  "python311Packages.discordpy"
+  "ffmpeg",                     # Já incluído, mas certifique-se de que está corretamente configurado
+  "libopus",                    # Adicionando o libopus
+  "python311",                   # A versão do Python
+  "python311Packages.pynacl",    # Necessário para o Discord
+  "python311Packages.discordpy" # Instala o discord.py com suporte para voz
 ]
 
 [phases.start]
