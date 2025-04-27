@@ -1,0 +1,10 @@
+[phases.setup]
+nixPkgs = [
+  "ffmpeg",
+  "python311",
+  "python311Packages.pynacl",
+  "python311Packages.discordpy"
+]
+
+[phases.start]
+cmd = "python3 bot.py"
