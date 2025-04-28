@@ -1,10 +1,16 @@
+# nixpacks.toml
 [phases.setup]
+# essas deps do nix trazem ffmpeg, libopus e python+PyNaCl de uma vez
 nixPkgs = [
-  "ffmpeg",
-  "python311",
-  "python311Packages.pynacl",
-  "python311Packages.discordpy"
+  "ffmpeg-full",                   # ffmpeg completo
+  "libopus",                       # libopus.so para o Opus encoder
+  "python311Full",                 # Python 3.11
+  "python311Packages.pynacl",      # PyNaCl para discord.py
 ]
+
+[phases.build]
+# só instala as libs do requirements
+cmd = "pip install -r requirements.txt"
 
 [phases.start]
 cmd = "python3 bot.py"
